@@ -1547,43 +1547,45 @@ function renderObject ($object_id)
 		startPortlet ('IP addresses');
 		echo "<table cellspacing=0 cellpadding='5' align='center' class='widetable'>\n";
 		if (getConfigVar ('EXT_IPV4_VIEW') == 'yes')
-			echo "<tr class=tdleft><th>OS interface</th><th>IP address</th><th>network</th><th>routed by</th><th>peers</th></tr>\n";
+			echo "<tr class=tdleft><th>Port</th><th>OS interface</th><th>IP address</th><th>network</th><th>routed by</th><th>peers</th></tr>\n";
 		else
-			echo "<tr class=tdleft><th>OS interface</th><th>IP address</th><th>peers</th></tr>\n";
+			echo "<tr class=tdleft><th>Port</th><th>OS interface</th><th>IP address</th><th>peers</th></tr>\n";
 
 		// group IP allocations by interface name instead of address family
 		$allocs_by_iface = array();
 		foreach (array ('ipv4', 'ipv6') as $ip_v)
 			foreach ($info[$ip_v] as $ip_bin => $alloc)
-				$allocs_by_iface[$alloc['osif']][$ip_bin] = $alloc;
+				$allocs_by_iface[$alloc['port']][$alloc['osif']][$ip_bin] = $alloc;
 
 		// sort allocs array by portnames
-		foreach (sortPortList ($allocs_by_iface) as $iface_name => $alloclist)
-		{
-			$is_first_row = TRUE;
-			foreach ($alloclist as $alloc)
-			{
-				$rendered_alloc = callHook ('getRenderedAlloc', $object_id, $alloc);
-				echo "<tr class='${rendered_alloc['tr_class']}' valign=top>";
+		foreach (sortPortList($allocs_by_iface) as $port => $portlist)
+		    foreach (sortPortList ($portlist) as $iface_name => $alloclist)
+		    {
+			    $is_first_row = TRUE;
+			    foreach ($alloclist as $alloc)
+			    {
+				    $rendered_alloc = callHook ('getRenderedAlloc', $object_id, $alloc);
+				    echo "<tr class='${rendered_alloc['tr_class']}' valign=top>";
 
-				// display iface name, same values are grouped into single cell
-				if ($is_first_row)
-				{
-					$rowspan = count ($alloclist) > 1 ? 'rowspan="' . count ($alloclist) . '"' : '';
-					echo "<td class=tdleft $rowspan>" . $iface_name . $rendered_alloc['td_name_suffix'] . "</td>";
-					$is_first_row = FALSE;
-				}
-				echo $rendered_alloc['td_ip'];
-				if (getConfigVar ('EXT_IPV4_VIEW') == 'yes')
-				{
-					echo $rendered_alloc['td_network'];
-					echo $rendered_alloc['td_routed_by'];
-				}
-				echo $rendered_alloc['td_peers'];
+				    // display iface name, same values are grouped into single cell
+				    if ($is_first_row)
+				    {
+					    $rowspan = count ($alloclist) > 1 ? 'rowspan="' . count ($alloclist) . '"' : '';
+					    echo "<td class=tdleft $rowspan>" . $port . $rendered_alloc['td_name_suffix'] . "</td>";
+					    $is_first_row = FALSE;
+				    }
+				    echo "<td>$iface_name</td>";
+				    echo $rendered_alloc['td_ip'];
+				    if (getConfigVar ('EXT_IPV4_VIEW') == 'yes')
+				    {
+					    echo $rendered_alloc['td_network'];
+					    echo $rendered_alloc['td_routed_by'];
+				    }
+				    echo $rendered_alloc['td_peers'];
 
-				echo "</tr>\n";
-			}
-		}
+				    echo "</tr>\n";
+			    }
+		    }
 		echo "</table><br>\n";
 		finishPortlet();
 	}
@@ -1890,8 +1892,15 @@ JSEND
 		printOpFormIntro ('add');
 		echo "<tr><td>"; // left btn
 		printImageHREF ('add', 'allocate', TRUE);
-		echo "</td>";
-		echo "<td class=tdleft><input type='text' size='10' name='bond_name'></td>\n"; // if-name
+		echo "</td><td>";
+
+		$options = array();
+		foreach (getObjectPortsAndLinks ($object_id) as $alloc) {
+		    $options[$alloc['id']] = ($alloc['label'] == '') ? $alloc['name'] : $alloc['label'];
+		}
+		printSelect ($options, array ('name' => 'port_id'));
+
+		echo "</td><td class=tdleft><input type='text' size='10' name='bond_name'></td>\n"; // if-name
 		echo "<td class=tdleft><input type=text name='ip'></td>\n"; // IP
 		if (getConfigVar ('EXT_IPV4_VIEW') == 'yes')
 			echo "<td colspan=2>&nbsp;</td>"; // network, routed by
@@ -1906,6 +1915,7 @@ JSEND
 	startPortlet ('Allocations');
 	echo "<table cellspacing=0 cellpadding='5' align='center' class='widetable'><tr>\n";
 	echo '<th>&nbsp;</th>';
+	echo '<th>Port</th>';
 	echo '<th>OS interface</th>';
 	echo '<th>IP address</th>';
 	if (getConfigVar ('EXT_IPV4_VIEW') == 'yes')
@@ -1931,7 +1941,7 @@ JSEND
 		$alloc_list .= "<tr class='${rendered_alloc['tr_class']}' valign=top>";
 
 		$alloc_list .= "<td>" . getOpLink (array ('op' => 'del', 'ip' => $alloc['addrinfo']['ip']), '', 'delete', 'Delete this IP address') . "</td>";
-		$alloc_list .= "<td class=tdleft><input type='text' name='bond_name' value='${alloc['osif']}' size=10>" . $rendered_alloc['td_name_suffix'] . "</td>";
+		$alloc_list .= "<td>${alloc['port']}</td><td class=tdleft><input type='text' name='bond_name' value='${alloc['osif']}' size=10>" . $rendered_alloc['td_name_suffix'] . "</td>";
 		$alloc_list .= $rendered_alloc['td_ip'];
 		if (getConfigVar ('EXT_IPV4_VIEW') == 'yes')
 		{
@@ -3293,7 +3303,7 @@ function renderIPAddress ($ip_bin)
 	{
 		startPortlet ('allocations');
 		echo "<table class='widetable' cellpadding=5 cellspacing=0 border=0 align='center' width='100%'>\n";
-		echo "<tr><th>object</th><th>OS interface</th><th>allocation type</th></tr>\n";
+		echo "<tr><th>Object</th><th>Port</th><th>OS interface</th><th>allocation type</th></tr>\n";
 		// render all allocation records for this address the same way
 		foreach ($address['allocs'] as $bond)
 		{
@@ -3302,6 +3312,7 @@ function renderIPAddress ($ip_bin)
 				$tr_class .= ' highlight';
 			echo "<tr class='$tr_class'>" .
 				"<td>" . makeIPAllocLink ($ip_bin, $bond) . "</td>" .
+				"<td>${bond['port']}</td>" .
 				"<td>${bond['name']}</td>" .
 				"<td><strong>" . $aat[$bond['type']] . "</strong></td>" .
 				"</tr>\n";
@@ -3471,8 +3482,9 @@ function renderNATv4ForObject ($object_id)
 		{
 			$ip = $alloc['addrinfo']['ip'];
 			$name = (! isset ($alloc['addrinfo']['name']) || $alloc['addrinfo']['name'] == '') ? '' : (' (' . stringForLabel ($alloc['addrinfo']['name']) . ')');
-			$osif = (! isset ($alloc['osif']) || $alloc['osif'] == '') ? '' : ($alloc['osif'] . ': ');
-			$options[$ip] = $osif . $ip . $name;
+			$port = (! isset ($alloc['port']) || $alloc['port'] == '') ? '' : ($alloc['port']);
+			$osif = (! isset ($alloc['osif']) || $alloc['osif'] == '') ? '' : ($alloc['osif']);
+			$options[$ip] = $port . $osif . ': ' . $ip . $name;
 		}
 		printSelect ($options, array ('name' => 'localip'));
 
@@ -3643,19 +3655,6 @@ function searchHandler()
 		showError ('Search string cannot be empty.');
 		redirectUser (buildRedirectURL ('index', 'default'));
 	}
-
-	try
-	{
-		parseSearchTerms ($terms);
-		// Discard the return value as searchEntitiesByText() and its retriever
-		// functions expect the original string as the parameter.
-	}
-	catch (InvalidArgException $iae)
-	{
-		showError ($iae->getMessage());
-		redirectUser (buildRedirectURL ('index', 'default'));
-	}
-
 	renderSearchResults ($terms, searchEntitiesByText ($terms));
 }
 
@@ -5255,14 +5254,13 @@ function showPathAndSearch ($pageno, $tabno)
 	{
 		$self = __FUNCTION__;
 		global $page;
-		global $sic;
 		$path = array();
 		$page_name = preg_replace ('/:.*/', '', $targetno);
 		// Recursion breaks at first parentless page.
 		if ($page_name == 'ipaddress')
 		{
 			// case ipaddress is a universal v4/v6 page, it has two parents and requires special handling
-			$ip_bin = ip_parse ($sic['ip']);
+			$ip_bin = ip_parse ($_REQUEST['ip']);
 			$parent = (strlen ($ip_bin) == 16 ? 'ipv6net' : 'ipv4net');
 			$path = $self ($parent);
 			$path[] = $targetno;
@@ -5277,7 +5275,6 @@ function showPathAndSearch ($pageno, $tabno)
 		return $path;
 	}
 	global $page, $tab;
-	global $sic;
 	// Path.
 	$path = getPath ($pageno);
 	$items = array();
@@ -5349,9 +5346,7 @@ function showPathAndSearch ($pageno, $tabno)
 	echo "<input type=hidden name=last_page value=$pageno>";
 	echo "<input type=hidden name=last_tab value=$tabno>";
 	// This input will be the first, if we don't add ports or addresses.
-	echo '<label>Search:<input type=text name=q size=20 value="';
-	echo array_key_exists ('q', $sic) ? stringForTextInputValue ($sic['q']) : '';
-	echo '"></label></form></div>';
+	echo "<label>Search:<input type=text name=q size=20 value='".(isset ($_REQUEST['q']) ? htmlspecialchars ($_REQUEST['q'], ENT_QUOTES) : '')."'></label></form></div>";
 
 	// Path (breadcrumbs)
 	echo implode(' : ', array_reverse ($items));
@@ -6488,7 +6483,7 @@ function renderTableViewer ($columns, $rows, $params = NULL)
 			'cellspacing' => 0,
 			'cellpadding' => 5,
 			'align' => 'center',
-			'class' => 'widetable zebra0',
+			'class' => $header_row ? 'widetable zebra' : 'widetable zebra0',
 		);
 	echo makeHtmlTag ('table', $params);
 	if ($header_row)

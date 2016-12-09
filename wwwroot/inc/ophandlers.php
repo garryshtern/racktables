@@ -1020,6 +1020,7 @@ function addIPAllocation ()
 	(
 		$ip_bin,
 		genericAssertion ('object_id', 'uint'),
+		genericAssertion('port_id', 'uint'),
 		genericAssertion ('bond_name', 'string0'),
 		$alloc_type
 	);
@@ -3372,7 +3373,7 @@ function autoPopulateUCS()
 			#  	 Set Serial#
 			commitUpdateAttrValue ($new_object_id, 1, $item['serial']);
 			commitLinkEntities ('object', $ucsm_id, 'object', $new_object_id);
-			bindIPToObject (ip_parse ($item['OOB']), $new_object_id, 'mgmt0', 'regular');
+			bindIPToObject (ip_parse ($item['OOB']), $new_object_id, NULL, 'mgmt0', 'regular');
 			$done++;
 		}
 		elseif ($item['type'] == 'EquipmentChassis')

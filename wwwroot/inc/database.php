@@ -1800,12 +1800,14 @@ function getAllIPv4Allocations ()
 {
 	$result = usePreparedSelectBlade
 	(
-		"select object_id as object_id, ".
-		"Object.name as object_name, ".
-		"IPv4Allocation.name as name, ".
-		"IPv4Allocation.type as type, ".
+		"select o.object_id as object_id, ".
+		"o.name as object_name, ".
+		"p.name, ".
+		"p.label, ".
+		"ia.name as name, ".
+		"ia.type as type, ".
 		"INET_NTOA(ip) as ip ".
-		"from IPv4Allocation join Object on id=object_id "
+		"FROM IPv4Allocation ia JOIN Object o ON o.id=ia.object_id JOIN Port p on p.id=ia.port_id"
 	);
 	return $result->fetchAll (PDO::FETCH_ASSOC);
 }
@@ -1986,12 +1988,17 @@ function getObjectIPv4AllocationList ($object_id)
 	$ret = array();
 	$result = usePreparedSelectBlade
 	(
-		'SELECT name AS osif, type, ip FROM IPv4Allocation ' .
-		'WHERE object_id = ?',
+		'SELECT p.name AS port, p.label, i.name AS osif, i.type, i.ip '.
+		'FROM IPv4Allocation i LEFT JOIN Port p ON i.port_id = p.id ' .
+		'WHERE i.object_id = ?',
 		array ($object_id)
 	);
 	while ($row = $result->fetch (PDO::FETCH_ASSOC))
-		$ret[ip4_int2bin ($row['ip'])] = array ('osif' => $row['osif'], 'type' => $row['type']);
+		$ret[ip4_int2bin ($row['ip'])] = array (
+		    'port' => ($row['label'] == '') ? $row['port'] : $row['label'],
+		    'osif' => $row['osif'],
+		    'type' => $row['type']
+		);
 	return $ret;
 }
 
@@ -2002,12 +2009,17 @@ function getObjectIPv6AllocationList ($object_id)
 	$ret = array();
 	$result = usePreparedSelectBlade
 	(
-		'SELECT name AS osif, type, ip AS ip FROM IPv6Allocation ' .
-		'WHERE object_id = ?',
+		'SELECT p.name AS port, p.label, i.name AS osif, i.type, i.ip '.
+		'FROM IPv6Allocation i LEFT JOIN Port p ON i.port_id = p.id ' .
+		'WHERE i.object_id = ?',
 		array ($object_id)
 	);
 	while ($row = $result->fetch (PDO::FETCH_ASSOC))
-		$ret[$row['ip']] = array ('osif' => $row['osif'], 'type' => $row['type']);
+		$ret[$row['ip']] = array (
+		    'port' => ($row['label'] == '') ? $row['port'] : $row['label'],
+		    'osif' => $row['osif'],
+		    'type' => $row['type']
+		);
 	return $ret;
 }
 
@@ -2032,7 +2044,7 @@ function amplifyAllocationList ($alloc_list)
 	$ret = array();
 	$sorted = array();
 	foreach ($alloc_list as $ip_bin => $alloc)
-		$sorted[$alloc['osif']][$ip_bin] = $alloc;
+		$sorted[$alloc['port'].$alloc['osif']][$ip_bin] = $alloc;
 	foreach (sortPortList ($sorted) as $osif => $subarray)
 		foreach ($subarray as $ip_bin => $alloc)
 		{
@@ -2137,9 +2149,9 @@ function scanIPv4Space ($pairlist, $filter_flags = IPSCAN_ANY)
 	{
 	if ($filter_flags & IPSCAN_RTR_ONLY)
 		$whereexpr2 .= " AND ia.type = 'router'";
-	$query =
-		"select ia.ip, ia.object_id, ia.name, ia.type, Object.name as object_name " .
-		"from IPv4Allocation AS ia INNER JOIN Object ON ia.object_id = Object.id where ${whereexpr2} order by ia.type";
+	$query = "select ia.ip, ia.object_id, ia.name, ia.type, p.name AS port, p.label, o.name as object_name " .
+		"from IPv4Allocation AS ia INNER JOIN Object o ON ia.object_id = o.id LEFT JOIN Port p ON ia.port_id = p.id ".
+		"where ${whereexpr2} order by ia.type";
 	$result = usePreparedSelectBlade ($query, $qparams);
 	while ($row = $result->fetch (PDO::FETCH_ASSOC))
 	{
@@ -2149,7 +2161,7 @@ function scanIPv4Space ($pairlist, $filter_flags = IPSCAN_ANY)
 		$ret[$ip_bin]['allocs'][] = array
 		(
 			'type' => $row['type'],
-			'name' => $row['name'],
+			'name' => (($row['label'] == '') ? $row['port'] : $row['label']) . $row['name'],
 			'object_id' => $row['object_id'],
 			'object_name' => $row['object_name'],
 		);
@@ -2345,8 +2357,9 @@ function scanIPv6Space ($pairlist, $filter_flags = IPSCAN_ANY)
 	if ($filter_flags & IPSCAN_RTR_ONLY)
 		$whereexpr2 .= " AND ia.type = 'router'";
 	$query =
-		"select ia.ip, ia.object_id, ia.name, ia.type, Object.name as object_name " .
-		"from IPv6Allocation AS ia INNER JOIN Object ON ia.object_id = Object.id where ${whereexpr2} order by ia.type";
+		"select ia.ip, ia.object_id, ia.name, p.name AS port, p.label, ia.type, o.name as object_name " .
+		"from IPv6Allocation AS ia INNER JOIN Object o ON ia.object_id = o.id " .
+		"where ${whereexpr2} order by ia.type";
 	$result = usePreparedSelectBlade ($query, $qparams);
 	while ($row = $result->fetch (PDO::FETCH_ASSOC))
 	{
@@ -2434,7 +2447,7 @@ function scanIPv6Space ($pairlist, $filter_flags = IPSCAN_ANY)
 	return $ret;
 }
 
-function bindIPToObject ($ip_bin, $object_id = 0, $name = '', $type = '')
+function bindIPToObject ($ip_bin, $object_id = 0, $port_id = NULL, $name = '', $type = '')
 {
 	switch (strlen ($ip_bin))
 	{
@@ -2461,7 +2474,7 @@ function bindIPToObject ($ip_bin, $object_id = 0, $name = '', $type = '')
 	usePreparedInsertBlade
 	(
 		$table,
-		array ('ip' => $db_ip, 'object_id' => $object_id, 'name' => $name, 'type' => $type)
+		array ('ip' => $db_ip, 'object_id' => $object_id, 'port_id' => $port_id, 'name' => $name, 'type' => $type)
 	);
 	// store history line
 	$cell = spotEntity ('object', $object_id);
@@ -2469,18 +2482,18 @@ function bindIPToObject ($ip_bin, $object_id = 0, $name = '', $type = '')
 	addIPLogEntry ($ip_bin, "Binded with ${cell['dname']}, ifname=$name");
 }
 
-function bindIPv4ToObject ($ip_bin, $object_id = 0, $name = '', $type = '')
+function bindIPv4ToObject ($ip_bin, $object_id = 0, $port_id = NULL, $name = '', $type = '')
 {
 	if (strlen ($ip_bin) != 4)
 		throw new InvalidArgException ('ip_bin', $ip_bin, "Invalid binary IP");
-	return bindIPToObject ($ip_bin, $object_id, $name, $type);
+	return bindIPToObject ($ip_bin, $port_id, $object_id, $name, $type);
 }
 
-function bindIPv6ToObject ($ip_bin, $object_id = 0, $name = '', $type = '')
+function bindIPv6ToObject ($ip_bin, $object_id = 0, $port_id = NULL, $name = '', $type = '')
 {
 	if (strlen ($ip_bin) != 16)
 		throw new InvalidArgException ('ip_bin', $ip_bin, "Invalid binary IP");
-	return bindIPToObject ($ip_bin, $object_id, $name, $type);
+	return bindIPToObject ($ip_bin, $port_id, $object_id, $name, $type);
 }
 
 // Universal v4/v6 wrapper around getIPv4AddressNetworkId and getIPv6AddressNetworkId.
@@ -2664,7 +2677,7 @@ function updateIPBond ($ip_bin, $object_id=0, $name='', $type='')
 	}
 }
 
-function updateIPv4Bond ($ip_bin, $object_id=0, $name='', $type='')
+function updateIPv4Bond ($ip_bin, $object_id=0, $port_id = NULL, $name='', $type='')
 {
 	usePreparedUpdateBlade
 	(
@@ -2673,6 +2686,7 @@ function updateIPv4Bond ($ip_bin, $object_id=0, $name='', $type='')
 		(
 			'name' => $name,
 			'type' => $type,
+			'port_id' => $port_id,
 		),
 		array
 		(
@@ -2682,7 +2696,7 @@ function updateIPv4Bond ($ip_bin, $object_id=0, $name='', $type='')
 	);
 }
 
-function updateIPv6Bond ($ip_bin, $object_id=0, $name='', $type='')
+function updateIPv6Bond ($ip_bin, $object_id=0, $port_id = NULL, $name='', $type='')
 {
 	usePreparedUpdateBlade
 	(
@@ -2691,6 +2705,7 @@ function updateIPv6Bond ($ip_bin, $object_id=0, $name='', $type='')
 		(
 			'name' => $name,
 			'type' => $type,
+			'port_id' => $port_id,
 		),
 		array
 		(
@@ -3047,8 +3062,7 @@ function getSearchResultByField ($tablename, $retcolumns, $scancolumn, $terms, $
 	$query = 'SELECT ' . implode (', ', $retcolumns) . " FROM ${tablename} WHERE ";
 	$qparams = array();
 	$pfx = '';
-	$pterms = $exactness == 3 ? explode (' ', $terms) : parseSearchTerms ($terms);
-	foreach ($pterms as $term)
+	foreach (explode (' ', $terms) as $term)
 	{
 		switch ($exactness)
 		{
@@ -5259,7 +5273,7 @@ function getVlanRow ($vlan_ck)
 		'(SELECT group_id FROM VLANDomain WHERE id = domain_id) AS domain_group_id ' .
 		'FROM VLANDescription WHERE domain_id = ? AND vlan_id = ?';
 	$result = usePreparedSelectBlade ($query, array ($vdom_id, $vlan_id));
-	if (FALSE === $ret = $result->fetch (PDO::FETCH_ASSOC))
+	if (NULL === $ret = $result->fetch (PDO::FETCH_ASSOC))
 		throw new EntityNotFoundException ('VLAN', $vlan_ck);
 	$ret['vlan_ck'] = $vlan_ck;
 	return $ret;
